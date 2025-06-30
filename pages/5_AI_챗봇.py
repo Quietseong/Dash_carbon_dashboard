@@ -4,9 +4,12 @@ AI 챗봇 페이지
 """
 
 import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime
 import sys
 import os
-from datetime import datetime
 from dotenv import load_dotenv
 
 # .env 파일 로드 시도
@@ -19,86 +22,95 @@ except Exception as e:
     st.error(f"환경변수 로드 중 오류: {e}")
     st.error("⚠️ .env 파일을 확인해주세요. env.example 파일을 참고하여 .env 파일을 생성할 수 있습니다.")
 
-# 상위 디렉토리의 agent 모듈 import를 위한 경로 추가
+# 상위 디렉토리의 모듈 import를 위한 경로 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 향상된 에이전트 import
 try:
     from agent.enhanced_carbon_rag_agent import EnhancedCarbonRAGAgent
+    AGENT_AVAILABLE = True
 except ImportError as e:
-    st.error(f"향상된 RAG 에이전트 모듈을 불러올 수 없습니다: {e}")
-    st.stop()
+    st.error(f"EnhancedCarbonRAGAgent 모듈을 불러올 수 없습니다: {e}")
+    AGENT_AVAILABLE = False
 
 # 페이지 설정은 main.py에서 처리됨
 
-# iframe용 CSS - 더 컴팩트하게 수정
+# CSS 스타일
 st.markdown("""
 <style>
     .main-header {
-        font-size: 24px;
+        font-size: 28px;
         font-weight: bold;
         background: linear-gradient(90deg, #1f77b4, #ff7f0e, #2ca02c);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
-        margin-bottom: 20px;
+        margin-bottom: 30px;
     }
     .chat-container {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 15px;
-        border-radius: 10px;
+        padding: 20px;
+        border-radius: 15px;
         color: white;
-        margin: 10px 0;
+        margin: 20px 0;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     }
     .chat-message {
         background: rgba(255,255,255,0.1);
-        padding: 8px;
-        border-radius: 6px;
-        margin: 6px 0;
-        font-size: 12px;
+        padding: 12px;
+        border-radius: 8px;
+        margin: 10px 0;
     }
     .user-message {
         background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
-        margin-left: 15%;
+        margin-left: 10%;
+        margin-right: 5%;
     }
     .assistant-message {
         background: linear-gradient(135deg, #00b894 0%, #00a085 100%);
-        margin-right: 15%;
+        margin-left: 5%;
+        margin-right: 10%;
     }
     .data-info-card {
         background: white;
-        padding: 15px;
+        padding: 20px;
         border-radius: 10px;
         box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        margin: 10px 0;
-        border-left: 3px solid #1f77b4;
-        font-size: 12px;
+        margin: 15px 0;
+        border-left: 4px solid #1f77b4;
     }
     .example-queries {
         background: linear-gradient(135deg, #fd79a8 0%, #e84393 100%);
-        padding: 15px;
-        border-radius: 10px;
+        padding: 20px;
+        border-radius: 15px;
         color: white;
-        margin: 10px 0;
+        margin: 15px 0;
     }
     .stButton > button {
         width: 100%;
-        margin: 3px 0;
-        font-size: 11px;
-        padding: 6px;
-        height: auto;
+        margin: 5px 0;
+        border-radius: 20px;
+        border: none;
+        padding: 10px;
+        font-weight: bold;
+        transition: all 0.3s ease;
     }
-    .stTextInput > div > div > input {
-        font-size: 12px;
-        padding: 6px;
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
     }
-    .stMarkdown {
-        font-size: 12px;
+    
+    /* 그래프 크기 제어 */
+    .stPlotlyChart, .element-container:has(.stPlotlyChart) {
+        max-width: 800px !important;
+        margin: 0 auto !important;
     }
-    .stDataFrame {
-        font-size: 10px;
-    }
-    .stPlotlyChart {
-        height: 200px;
+    
+    /* matplotlib 그래프 크기 제어 */
+    .stPlotlyChart > div, .element-container > div > div > div > img {
+        max-width: 800px !important;
+        height: auto !important;
+        margin: 0 auto !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -106,10 +118,8 @@ st.markdown("""
 # 세션 상태 초기화
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
-if 'current_query' not in st.session_state:
-    st.session_state.current_query = ""
-if 'auto_submit' not in st.session_state:
-    st.session_state.auto_submit = False
+if 'agent' not in st.session_state:
+    st.session_state.agent = None
 
 # 타이틀
 st.markdown('<h1 class="main-header">🤖 AI 챗봇 - 탄소 데이터 분석</h1>', unsafe_allow_html=True)
@@ -117,181 +127,205 @@ st.markdown('<h1 class="main-header">🤖 AI 챗봇 - 탄소 데이터 분석</h
 # 에이전트 초기화
 @st.cache_resource
 def load_agent():
-    """향상된 RAG 에이전트 로드 (캐시 사용)"""
-    return EnhancedCarbonRAGAgent()
+    """EnhancedCarbonRAGAgent 로드 (캐시 사용)"""
+    if not AGENT_AVAILABLE:
+        return None
+    return EnhancedCarbonRAGAgent(data_folder="data")
 
 # 에이전트 로드
-try:
-    agent = load_agent()
-except Exception as e:
-    st.error(f"향상된 에이전트 초기화 실패: {e}")
+if AGENT_AVAILABLE:
+    try:
+        with st.spinner("🔄 AI 에이전트를 초기화하고 있습니다..."):
+            agent = load_agent()
+            if agent and agent.llm:
+                st.success("✅ AI 에이전트가 성공적으로 초기화되었습니다!")
+                st.session_state.agent = agent
+            else:
+                st.error("❌ AI 에이전트 초기화에 실패했습니다.")
+                st.stop()
+    except Exception as e:
+        st.error(f"❌ 에이전트 초기화 중 오류 발생: {e}")
+        st.stop()
+else:
+    st.error("❌ EnhancedCarbonRAGAgent를 사용할 수 없습니다.")
     st.stop()
 
 # 데이터 정보 표시
-st.markdown("""
-<div class="data-info-card">
-    <h3>📊 데이터 정보</h3>
-</div>
-""", unsafe_allow_html=True)
-
-data_info = agent.get_available_data_info()
-st.markdown(data_info)
+if st.session_state.agent:
+    st.markdown("""
+    <div class="data-info-card">
+        <h3>📊 데이터 정보</h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    data_info = st.session_state.agent.get_available_data_info()
+    st.markdown(data_info)
 
 # 예시 질문들
 st.markdown("""
 <div class="example-queries">
-    <h3>💡 예시 질문들</h3>
+    <h3>💡 빠른 질문 예시</h3>
+    <p>아래 버튼을 클릭하여 빠르게 데이터를 분석해보세요!</p>
 </div>
 """, unsafe_allow_html=True)
 
-example_queries = [
-    "📈 총배출량의 연도별 변화 추이는?",
-    "🏭 에너지 산업과 수송 산업의 배출량 비교",
-    "📊 2017년과 2021년의 배출량 차이는?",
-    "🔍 가장 많이 배출하는 분야는?",
-    "📉 감축률이 가장 높은 연도는?",
-    "🌍 전체 데이터에서 평균 배출량은?"
-]
-
-def process_example_query(query):
-    """예시 질문 처리 함수"""
-    # 즉시 질문 처리
-    try:
-        with st.spinner("🤔 AI가 데이터를 분석하고 있습니다..."):
-            response, visualization = agent.ask(query)
-            
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if visualization:
-                st.session_state.chat_history.append((query, response, timestamp, visualization))
-            else:
-                st.session_state.chat_history.append((query, response, timestamp))
-    except Exception as e:
-        st.error(f"❌ 오류가 발생했습니다: {e}")
+if st.session_state.agent:
+    sample_questions = st.session_state.agent.get_sample_questions()
     
-    # 상태 초기화 (st.rerun() 제거)
-    st.session_state.current_query = ""
-    st.session_state.auto_submit = False
-
-col1, col2 = st.columns(2)
-with col1:
-    for i, query in enumerate(example_queries[:3]):
-        if st.button(query, key=f"example_{i}"):
-            process_example_query(query)
-
-with col2:
-    for i, query in enumerate(example_queries[3:], 3):
-        if st.button(query, key=f"example_{i}"):
-            process_example_query(query)
+    # 예시 질문 버튼들 (3x2 그리드)
+    col1, col2, col3 = st.columns(3)
+    
+    for i, question in enumerate(sample_questions):
+        col = [col1, col2, col3][i % 3]
+        with col:
+            if st.button(f"💬 {question}", key=f"sample_{i}"):
+                # 질문 처리
+                with st.spinner("🤔 AI가 분석하고 있습니다..."):
+                    try:
+                        response, visualization, table_data, figure_obj = st.session_state.agent.ask(question)
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        st.session_state.chat_history.append((question, response, timestamp, visualization, table_data, figure_obj))
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ 오류가 발생했습니다: {e}")
 
 # 채팅 인터페이스
 st.markdown("""
 <div class="chat-container">
-    <h3>💬 AI 챗봇과 대화하기</h3>
-    <p>탄소 배출 데이터에 대해 궁금한 것을 물어보세요!</p>
+    <h3>💬 AI와 대화하기</h3>
+    <p>탄소 배출 데이터에 대해 궁금한 것을 자유롭게 물어보세요!</p>
 </div>
 """, unsafe_allow_html=True)
 
 # 채팅 히스토리 표시
-for i, chat_item in enumerate(st.session_state.chat_history):
-    # 채팅 항목이 튜플인지 확인 (기존 호환성)
+for chat_item in st.session_state.chat_history:
+    # 다양한 형식 지원
     if len(chat_item) == 3:
         user_msg, assistant_msg, timestamp = chat_item
         visualization = None
+        table_data = None
+        figure_obj = None
     elif len(chat_item) == 4:
         user_msg, assistant_msg, timestamp, visualization = chat_item
+        table_data = None
+        figure_obj = None
+    elif len(chat_item) == 5:
+        user_msg, assistant_msg, timestamp, visualization, table_data = chat_item
+        figure_obj = None
     else:
-        continue
+        user_msg, assistant_msg, timestamp, visualization, table_data, figure_obj = chat_item
     
     st.markdown(f"""
     <div class="chat-message user-message">
-        <strong>🙋‍♂️ 사용자:</strong> {user_msg}
-        <br><small>{timestamp}</small>
+        <strong>🙋‍♂️ 사용자 ({timestamp}):</strong><br>
+        {user_msg}
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown(f"""
     <div class="chat-message assistant-message">
-        <strong>🤖 AI 어시스턴트:</strong> {assistant_msg}
+        <strong>🤖 AI 어시스턴트:</strong><br>
+        {assistant_msg}
     </div>
     """, unsafe_allow_html=True)
     
-    # 시각화가 있는 경우 표시
-    if visualization:
+    # 테이블이 생성된 경우 표시
+    if table_data is not None:
+        st.markdown("**📊 분석 결과 테이블:**")
+        st.dataframe(table_data, use_container_width=True)
+    
+    # 그래프가 생성된 경우 표시
+    if visualization == "plot_generated":
         try:
-            import base64
-            import io
-            from PIL import Image
+            # 방법 1: 컬럼과 직접 표시 (기본)
+            col1, col2, col3 = st.columns([1.5, 1, 1.5])
             
-            # base64 디코딩하여 이미지 표시
-            img_data = base64.b64decode(visualization)
-            img = Image.open(io.BytesIO(img_data))
+            with col2:  # 중앙 컬럼에만 그래프 표시
+                st.markdown('<div style="max-width: 400px; margin: 0 auto;">', unsafe_allow_html=True)
+                
+                # figure 객체가 있으면 직접 사용
+                if figure_obj is not None:
+                    st.pyplot(figure_obj, use_container_width=False)
+                # 없으면 기존 방식 사용
+                elif plt.get_fignums():
+                    st.pyplot(plt.gcf(), use_container_width=False)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
             
-            # 크기를 900x600으로 고정
-            resized_img = img.resize((900, 600), Image.Resampling.LANCZOS)
+            # 방법 2: 이미지로 저장 후 크기 제어 (주석 처리 - 필요시 활성화)
+            # import io
+            # import base64
+            # 
+            # if figure_obj is not None:
+            #     # 그래프를 이미지로 저장
+            #     buf = io.BytesIO()
+            #     figure_obj.savefig(buf, format='png', dpi=80, bbox_inches='tight')
+            #     buf.seek(0)
+            #     
+            #     # 중앙 정렬로 이미지 표시
+            #     col1, col2, col3 = st.columns([2, 1, 2])
+            #     with col2:
+            #         st.image(buf, width=400)  # 고정 너비 400px
             
-            st.image(resized_img, caption="AI가 생성한 데이터 시각화", width=900)
-        except Exception as viz_error:
-            st.warning(f"시각화 표시 중 오류: {viz_error}")
+            # 메모리 정리
+            import matplotlib.pyplot as plt
+            plt.close('all')
+        except Exception as e:
+            st.write(f"그래프 표시 중 오류: {e}")
 
-def handle_input_change():
-    """입력 변경 시 처리 함수 (엔터키 처리)"""
-    if st.session_state.chat_input.strip():
-        query = st.session_state.chat_input.strip()
-        process_query(query)
+# 사용자 입력
+st.markdown("### 💭 새로운 질문하기")
 
-def process_query(query):
-    """질문 처리 함수"""
-    if query.strip():
+# 엔터키 처리를 위한 폼 사용
+with st.form(key='question_form', clear_on_submit=True):
+    user_input = st.text_input(
+        "질문을 입력하세요:",
+        placeholder="예: 2021년과 2022년의 배출량 차이는 얼마나 되나요?",
+        key="user_input_form"
+    )
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        submit_button = st.form_submit_button("🚀 질문하기", type="primary", use_container_width=True)
+    with col2:
+        clear_button = st.form_submit_button("🗑️ 채팅 지우기", use_container_width=True)
+
+# 질문 처리
+if submit_button and user_input and st.session_state.agent:
+    with st.spinner("🤔 AI가 분석하고 있습니다..."):
         try:
-            # 로딩 표시와 함께 처리
-            with st.spinner("🤔 AI가 데이터를 분석하고 있습니다..."):
-                # 에이전트에게 질문
-                response, visualization = agent.ask(query)
-                
-                # 채팅 히스토리에 추가
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                if visualization:
-                    st.session_state.chat_history.append((query, response, timestamp, visualization))
-                else:
-                    st.session_state.chat_history.append((query, response, timestamp))
-                
-                # 입력창 초기화 (st.rerun() 제거)
-                st.session_state.chat_input = ""
-                st.session_state.auto_submit = False
-                st.session_state.current_query = ""
-                
+            response, visualization, table_data, figure_obj = st.session_state.agent.ask(user_input)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            st.session_state.chat_history.append((user_input, response, timestamp, visualization, table_data, figure_obj))
+            st.rerun()
         except Exception as e:
             st.error(f"❌ 오류가 발생했습니다: {e}")
-            st.session_state.auto_submit = False
+elif submit_button and not user_input:
+    st.warning("질문을 입력해주세요.")
 
-# 질문 입력 (답변 후 자동으로 비워짐)
-user_input = st.text_input(
-    "질문을 입력하세요 (엔터키로 바로 전송):",
-    value=st.session_state.get("chat_input", ""),  # 세션 상태에서 값 가져오기
-    key="chat_input",
-    placeholder="예: 2021년 총배출량은 얼마인가요?",
-    on_change=handle_input_change
-)
+# 채팅 지우기 처리
+if clear_button:
+    st.session_state.chat_history = []
+    st.rerun()
 
-# 예시 질문은 process_example_query에서 즉시 처리됨
-
-# 질문 처리 버튼 (엔터키 외 추가 옵션)
-if st.button("🚀 질문하기", key="ask_button"):
-    if user_input.strip():
-        process_query(user_input)
-    else:
-        st.warning("질문을 입력해주세요.")
-
-# 무한 루프 방지를 위해 제거됨
-
-# 채팅 히스토리 초기화 버튼
-if st.session_state.chat_history:
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
-        if st.button("🗑️ 채팅 히스토리 초기화", key="clear_history"):
-            st.session_state.chat_history = []
-            st.session_state.chat_input = ""
-
-# 플로팅 챗봇 버튼 제거됨
-
-# 질문창은 항상 유지 (초기화하지 않음) 
+# 도움말
+with st.expander("❓ 사용법 도움말"):
+    st.markdown("""
+    ### 🎯 효과적인 질문 방법
+    
+    **✅ 좋은 질문 예시:**
+    - "2021년 총 배출량은 얼마인가요?"
+    - "연도별 배출량 변화를 그래프로 보여주세요"
+    - "가장 배출량이 많은 분야는 무엇인가요?"
+    - "데이터의 기본 통계를 알려주세요"
+    
+    **❌ 피해야 할 질문:**
+    - 너무 모호한 질문 ("이거 어때?")
+    - 데이터에 없는 정보 요청
+    - 여러 질문을 한 번에 물어보기
+    
+    **💡 팁:**
+    - 구체적인 연도나 분야를 명시하세요
+    - 그래프나 차트가 필요하면 명시적으로 요청하세요
+    - 한 번에 하나의 질문만 하세요
+    """) 
